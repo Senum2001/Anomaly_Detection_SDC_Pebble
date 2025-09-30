@@ -1,0 +1,55 @@
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VSCode/IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Environments
+anomalib_env/
+venv/
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Results, models, and outputs
+results/
+api_inference_pred_masks_pipeline/
+api_inference_filtered_pipeline/
+api_inference_labeled_boxes_pipeline/
+TX/
+images/
+dataset/
+*.ckpt
+*.pth
+*.h5
+*.pt
+
+# Logs
+*.log
+
+# Cloudinary temp files
+*.tmp
+*.temp
+
+# Misc
+*.bak
+*.swp
+*.swo
+*.old
+*.orig
