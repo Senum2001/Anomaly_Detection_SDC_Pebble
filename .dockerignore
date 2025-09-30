@@ -1,0 +1,35 @@
+# Ignore Python cache and virtual environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+anomalib_env/
+
+# Ignore datasets and large folders
+images/
+dataset/
+results/
+TX/
+
+# Ignore model checkpoints and outputs
+*.ckpt
+*.jpg
+*.png
+
+# Ignore scripts and notebooks not needed for API
+scripts/
+
+# Ignore OS and editor files
+.DS_Store
+Thumbs.db
+.env
+
+# Ignore other unnecessary files
+*.log
+*.tmp
+
+# Keep only code, requirements.txt, configs, and Dockerfile
+!pipeline.py
+!requirements.txt
+!Dockerfile
+!configs/
