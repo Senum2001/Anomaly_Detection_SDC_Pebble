@@ -47,7 +47,7 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t senum071/anomaly-det-api:latest .
+          docker build -t senum071/anomaly-det-api:latest -t senum071/anomaly-det-api:v${{ github.run_number }} .
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -58,4 +58,5 @@ jobs:
       - name: Push Docker image
         run: |
           docker push senum071/anomaly-det-api:latest
+          docker push senum071/anomaly-det-api:v${{ github.run_number }}
           
