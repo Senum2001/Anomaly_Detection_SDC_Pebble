@@ -16,8 +16,6 @@ TX/
 *.jpg
 *.png
 
-# Ignore scripts and notebooks not needed for API
-scripts/
 
 # Ignore OS and editor files
 .DS_Store
