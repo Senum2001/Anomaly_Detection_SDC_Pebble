@@ -1,15 +1,28 @@
-anomalib[full]
-cloudinary
-flask
-gdown
-numpy
-opencv-python
-omegaconf
+# Optimized requirements - minimal dependencies for Hugging Face Spaces
+# Core inference only, no training dependencies
+
+# PyTorch (CPU version to save space)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.4.1+cpu
+torchvision==0.19.1+cpu
+
+# Anomalib (minimal, not [full])
+anomalib
+
+# OpenCV and image processing
+opencv-python-headless
 pillow
-python-dotenv
-pytorch-lightning==2.4.0
+numpy
+
+# Flask web framework
+flask
+
+# Cloudinary for image upload
+cloudinary
+
+# Configuration
+omegaconf
+pyyaml
+
+# Utilities
 requests
-torch==2.4.1
-torchvision
-gunicorn
-runpod
