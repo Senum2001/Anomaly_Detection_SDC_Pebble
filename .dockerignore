@@ -11,8 +11,8 @@ dataset/
 results/
 TX/
 
-# Ignore model checkpoints and outputs
-*.ckpt
+# Ignore model checkpoints and outputs (but allow downloading in Dockerfile)
+# *.ckpt (commented out to allow model download during build)
 *.jpg
 *.png
 
