@@ -1,6 +1,7 @@
 """
 RunPod serverless handler wrapper for the anomaly detection pipeline.
 This file acts as the entry point for RunPod serverless execution.
+Version: 2.0 - Optimized with pre-downloaded model
 """
 import runpod
 from pipeline import run_pipeline_for_image, download_image_from_url, upload_to_cloudinary
