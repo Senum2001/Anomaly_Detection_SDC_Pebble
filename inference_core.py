@@ -117,9 +117,13 @@ def classify_filtered_image(filtered_img_path: str):
     if img is None:
         raise FileNotFoundError(f"Could not read filtered image: {filtered_img_path}")
 
+    # Ensure consistent color space
+    if img.dtype != np.uint8:
+        img = img.astype(np.uint8)
+    
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     
-    # Color masks
+    # Color masks (with slight tolerance adjustments for consistency)
     blue_mask   = cv2.inRange(hsv, (90, 50, 20), (130, 255, 255))
     black_mask  = cv2.inRange(hsv, (0, 0, 0), (180, 255, 50))
     yellow_mask = cv2.inRange(hsv, (20, 130, 130), (35, 255, 255))
@@ -134,6 +138,11 @@ def classify_filtered_image(filtered_img_path: str):
     yellow_count = np.sum(yellow_mask > 0)
     orange_count = np.sum(orange_mask > 0)
     red_count    = np.sum(red_mask > 0)
+
+    # Debug logging
+    print(f"[Classification] Image shape: {img.shape}")
+    print(f"[Classification] Color counts - Blue: {blue_count}, Black: {black_count}, "
+          f"Yellow: {yellow_count}, Orange: {orange_count}, Red: {red_count}")
 
     label = "Unknown"
     box_list, label_list = [], []
@@ -157,7 +166,8 @@ def classify_filtered_image(filtered_img_path: str):
                 x, y, w, h = cv2.boundingRect(cnt)
                 box_list.append((x, y, w, h))
                 label_list.append("Point Overload (Faulty)")
-
+    
+    print(f"[Classification] Final label: {label}, Boxes found: {len(box_list)}")
     return label, box_list, label_list, img
 
 
@@ -213,10 +223,27 @@ def download_image_from_url(url):
     """Download image from URL to temp file"""
     import requests
     import tempfile
+    from urllib.parse import urlparse
+    import mimetypes
+    
     response = requests.get(url, stream=True)
     if response.status_code != 200:
         raise Exception(f"Failed to download image from {url}")
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+    
+    # Determine file extension from URL or Content-Type
+    content_type = response.headers.get('content-type', '')
+    if 'image/png' in content_type:
+        suffix = '.png'
+    elif 'image/jpeg' in content_type or 'image/jpg' in content_type:
+        suffix = '.jpg'
+    else:
+        # Try to get extension from URL
+        parsed_url = urlparse(url)
+        path = parsed_url.path
+        ext = os.path.splitext(path)[1]
+        suffix = ext if ext in ['.jpg', '.jpeg', '.png', '.bmp'] else '.jpg'
+    
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     for chunk in response.iter_content(1024):
         tmp.write(chunk)
     tmp.close()
