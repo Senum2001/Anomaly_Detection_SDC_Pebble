@@ -1,124 +1,63 @@
-"""# pipeline.py
+# pipeline.py
+# Combines PatchCore single-image inference + OpenCV heuristic classification
+# Usage: python pipeline.py <image_path>
 
-Flask API wrapper for the anomaly detection pipeline.# Combines PatchCore single-image inference + OpenCV heuristic classification
-
-This provides a Flask web interface for local testing.# Usage: python pipeline.py <image_path>
-
-For serverless deployment, use handler.py instead.
-
-"""import sys
-
-from flask import Flask, request, jsonifyimport os
-
-from inference_core import run_pipeline_for_image, download_image_from_url, upload_to_cloudinaryimport cv2
-
-import osimport numpy as np
-
+import sys
+import os
+import cv2
+import numpy as np
 from PIL import Image
-
-app = Flask(__name__)import torch
-
+import torch
 import tempfile
-
 import requests
-
-@app.route("/health", methods=["GET"])from flask import Flask, request, jsonify
-
-def health():from dotenv import load_dotenv
-
-    """Health check endpoint"""load_dotenv()
-
-    return jsonify({"status": "healthy"}), 200import cloudinary
-
+from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+load_dotenv()
+import cloudinary
 import cloudinary.uploader
-
 import subprocess
+from dotenv import load_dotenv
 
-@app.route("/infer", methods=["POST"])from dotenv import load_dotenv
+# ---- Load environment variables from .env ----
+load_dotenv()
 
-def infer():
+# ---- Import your PatchCore API (must be available in PYTHONPATH) ----
+from scripts.patchcore_api_inference import Patchcore, config, device
 
-    """# ---- Load environment variables from .env ----
+# ---- Output directories (pipeline-scoped) ----
+OUT_MASK_DIR = "api_inference_pred_masks_pipeline"
+OUT_FILTERED_DIR = "api_inference_filtered_pipeline"
+OUT_BOXED_DIR = "api_inference_labeled_boxes_pipeline"
 
-    Inference endpoint that accepts image URL and returns resultsload_dotenv()
+os.makedirs(OUT_MASK_DIR, exist_ok=True)
+os.makedirs(OUT_FILTERED_DIR, exist_ok=True)
+os.makedirs(OUT_BOXED_DIR, exist_ok=True)
 
-    Request JSON: {"image_url": "https://..."}
+# ---- Cloudinary config ----
+cloudinary.config(
+    cloud_name="dtyjmwyrp",
+    api_key="619824242791553",
+    api_secret="l8hHU1GIg1FJ8rDgvHd4Sf7BWMk"
+)
 
-    """# ---- Import your PatchCore API (must be available in PYTHONPATH) ----
-
-    try:from scripts.patchcore_api_inference import Patchcore, config, device
-
-        data = request.get_json()
-
-        if not data or "image_url" not in data:# ---- Output directories (pipeline-scoped) ----
-
-            return jsonify({"error": "Missing image_url"}), 400OUT_MASK_DIR = "api_inference_pred_masks_pipeline"
-
-        OUT_FILTERED_DIR = "api_inference_filtered_pipeline"
-
-        image_url = data["image_url"]OUT_BOXED_DIR = "api_inference_labeled_boxes_pipeline"
-
-        
-
-        # Download imageos.makedirs(OUT_MASK_DIR, exist_ok=True)
-
-        local_path = download_image_from_url(image_url)os.makedirs(OUT_FILTERED_DIR, exist_ok=True)
-
-        os.makedirs(OUT_BOXED_DIR, exist_ok=True)
-
-        # Run pipeline
-
-        results = run_pipeline_for_image(local_path)# ---- Cloudinary config ----
-
-        cloudinary.config(
-
-        # Upload outputs    cloud_name="dtyjmwyrp",
-
-        boxed_url = upload_to_cloudinary(results["boxed_path"], folder="pipeline_outputs") if results["boxed_path"] else None    api_key="619824242791553",
-
-        mask_url = upload_to_cloudinary(results["mask_path"], folder="pipeline_outputs") if results["mask_path"] else None    api_secret="l8hHU1GIg1FJ8rDgvHd4Sf7BWMk"
-
-        filtered_url = upload_to_cloudinary(results["filtered_path"], folder="pipeline_outputs") if results["filtered_path"] else None)
-
-        
-
-        # Clean up# ---- Load model once ----
-
-        if os.path.exists(local_path):GDRIVE_URL = "1ftzxTJUnlxpQFqPlaUozG_JUbl1Qi5tQ"
-
-            os.remove(local_path)MODEL_CKPT_PATH = os.path.abspath("model_checkpoint.ckpt")
-
-        try:
-
-        return jsonify({    import gdown
-
-            "label": results["label"],except ImportError:
-
-            "boxed_url": boxed_url,    subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown"])
-
-            "mask_url": mask_url,    import gdown
-
-            "filtered_url": filtered_url,if not os.path.exists(MODEL_CKPT_PATH):
-
-            "boxes": results.get("boxes", [])    raise FileNotFoundError(f"Model checkpoint not found at {MODEL_CKPT_PATH}. Please rebuild the Docker image to include the model.")
-
-        })else:
-
-            print(f"[INFO] Model checkpoint already exists at {MODEL_CKPT_PATH}, skipping download.")
-
-    except Exception as e:model = Patchcore.load_from_checkpoint(MODEL_CKPT_PATH, **config.model.init_args)
-
-        return jsonify({"error": str(e)}), 500model.eval()
-
+# ---- Load model once ----
+GDRIVE_URL = "1ftzxTJUnlxpQFqPlaUozG_JUbl1Qi5tQ"
+MODEL_CKPT_PATH = os.path.abspath("model_checkpoint.ckpt")
+try:
+    import gdown
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown"])
+    import gdown
+if not os.path.exists(MODEL_CKPT_PATH):
+    raise FileNotFoundError(f"Model checkpoint not found at {MODEL_CKPT_PATH}. Please rebuild the Docker image to include the model.")
+else:
+    print(f"[INFO] Model checkpoint already exists at {MODEL_CKPT_PATH}, skipping download.")
+model = Patchcore.load_from_checkpoint(MODEL_CKPT_PATH, **config.model.init_args)
+model.eval()
 model = model.to(device)
 
-
-
-if __name__ == "__main__":# ---- Flask app ----
-
-    # For local testing onlyapp = Flask(__name__)
-
-    app.run(host="0.0.0.0", port=8000, debug=False)
+# ---- Flask app ----
+app = Flask(__name__)
 
 
 # =========================
