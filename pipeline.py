@@ -49,8 +49,7 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown"])
     import gdown
 if not os.path.exists(MODEL_CKPT_PATH):
-    print(f"[INFO] Downloading model checkpoint from Google Drive to {MODEL_CKPT_PATH}...")
-    gdown.download(id=GDRIVE_URL, output=MODEL_CKPT_PATH, quiet=False)
+    raise FileNotFoundError(f"Model checkpoint not found at {MODEL_CKPT_PATH}. Please rebuild the Docker image to include the model.")
 else:
     print(f"[INFO] Model checkpoint already exists at {MODEL_CKPT_PATH}, skipping download.")
 model = Patchcore.load_from_checkpoint(MODEL_CKPT_PATH, **config.model.init_args)

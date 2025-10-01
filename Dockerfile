@@ -11,6 +11,11 @@ RUN pip install -r requirements.txt
 # Install system dependencies for OpenCV
 RUN apt-get update && apt-get install -y libgl1 libglib2.0-0
 
+
+# Download model checkpoint from Google Drive using gdown
+RUN pip install gdown && \
+	gdown --id 1ftzxTJUnlxpQFqPlaUozG_JUbl1Qi5tQ -O /app/model_checkpoint.ckpt
+
 # Copy all project files
 COPY . .
 
