@@ -111,12 +111,132 @@ def infer_single_image_with_patchcore(image_path: str):
     }
 
 
+# Helper functions for classification
+def _iou(boxA, boxB):
+    """Calculate Intersection over Union"""
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[0] + boxA[2], boxB[0] + boxB[2])
+    yB = min(boxA[1] + boxA[3], boxB[1] + boxB[3])
+    interW = max(0, xB - xA)
+    interH = max(0, yB - yA)
+    interArea = interW * interH
+    boxAArea = boxA[2] * boxA[3]
+    boxBArea = boxB[2] * boxB[3]
+    return interArea / float(boxAArea + boxBArea - interArea + 1e-6)
+
+
+def _merge_close_boxes(boxes, labels, dist_thresh=20):
+    """Merge boxes that are close to each other"""
+    merged, merged_labels = [], []
+    used = [False] * len(boxes)
+    for i in range(len(boxes)):
+        if used[i]:
+            continue
+        x1, y1, w1, h1 = boxes[i]
+        label1 = labels[i]
+        x2, y2, w2, h2 = x1, y1, w1, h1
+        for j in range(i + 1, len(boxes)):
+            if used[j]:
+                continue
+            bx, by, bw, bh = boxes[j]
+            cx1, cy1 = x1 + w1 // 2, y1 + h1 // 2
+            cx2, cy2 = bx + bw // 2, by + bh // 2
+            if abs(cx1 - cx2) < dist_thresh and abs(cy1 - cy2) < dist_thresh and label1 == labels[j]:
+                x2 = min(x2, bx)
+                y2 = min(y2, by)
+                w2 = max(x1 + w1, bx + bw) - x2
+                h2 = max(y1 + h1, by + bh) - y2
+                used[j] = True
+        merged.append((x2, y2, w2, h2))
+        merged_labels.append(label1)
+        used[i] = True
+    return merged, merged_labels
+
+
+def _nms_iou(boxes, labels, iou_thresh=0.4):
+    """Non-Maximum Suppression based on IOU"""
+    if len(boxes) == 0:
+        return [], []
+    idxs = np.argsort([w * h for (x, y, w, h) in boxes])[::-1]
+    keep, keep_labels = [], []
+    while len(idxs) > 0:
+        i = idxs[0]
+        keep.append(boxes[i])
+        keep_labels.append(labels[i])
+        remove = [0]
+        for j in range(1, len(idxs)):
+            if _iou(boxes[i], boxes[idxs[j]]) > iou_thresh:
+                remove.append(j)
+        idxs = np.delete(idxs, remove)
+    return keep, keep_labels
+
+
+def _filter_faulty_inside_potential(boxes, labels):
+    """Remove potential boxes that contain faulty boxes"""
+    filtered_boxes, filtered_labels = [], []
+    for (box, label) in zip(boxes, labels):
+        if label == "Point Overload (Potential)":
+            keep = True
+            x, y, w, h = box
+            for (fbox, flabel) in zip(boxes, labels):
+                if flabel == "Point Overload (Faulty)":
+                    fx, fy, fw, fh = fbox
+                    if fx >= x and fy >= y and fx + fw <= x + w and fy + fh <= y + h:
+                        keep = False
+                        break
+            if keep:
+                filtered_boxes.append(box)
+                filtered_labels.append(label)
+        else:
+            filtered_boxes.append(box)
+            filtered_labels.append(label)
+    return filtered_boxes, filtered_labels
+
+
+def _filter_faulty_overlapping_potential(boxes, labels):
+    """Remove potential boxes that overlap with faulty boxes"""
+    def is_overlapping(boxA, boxB):
+        xA = max(boxA[0], boxB[0])
+        yA = max(boxA[1], boxB[1])
+        xB = min(boxA[0] + boxA[2], boxB[0] + boxB[2])
+        yB = min(boxA[1] + boxA[3], boxB[1] + boxB[3])
+        return (xB > xA) and (yB > yA)
+
+    filtered_boxes, filtered_labels = [], []
+    for (box, label) in zip(boxes, labels):
+        if label == "Point Overload (Potential)":
+            keep = True
+            for (fbox, flabel) in zip(boxes, labels):
+                if flabel == "Point Overload (Faulty)" and is_overlapping(box, fbox):
+                    keep = False
+                    break
+            if keep:
+                filtered_boxes.append(box)
+                filtered_labels.append(label)
+        else:
+            filtered_boxes.append(box)
+            filtered_labels.append(label)
+    return filtered_boxes, filtered_labels
+
+
 def classify_filtered_image(filtered_img_path: str):
-    """OpenCV heuristic classification on filtered image"""
+    """
+    Runs the heuristic color-based classification on the FILTERED image.
+    Returns:
+      label: str
+      box_list: [(x, y, w, h), ...]
+      label_list: [str, ...]
+      img_bgr: the filtered image as BGR
+    """
     img = cv2.imread(filtered_img_path)
     if img is None:
         raise FileNotFoundError(f"Could not read filtered image: {filtered_img_path}")
 
+    # Ensure consistent color space
+    if img.dtype != np.uint8:
+        img = img.astype(np.uint8)
+    
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     
     # Color masks
@@ -135,29 +255,109 @@ def classify_filtered_image(filtered_img_path: str):
     orange_count = np.sum(orange_mask > 0)
     red_count    = np.sum(red_mask > 0)
 
+    # Debug logging
+    print(f"[Classification] Image shape: {img.shape}")
+    print(f"[Classification] Color counts - Blue: {blue_count}, Black: {black_count}, "
+          f"Yellow: {yellow_count}, Orange: {orange_count}, Red: {red_count}")
+
     label = "Unknown"
     box_list, label_list = [], []
 
-    # Simplified classification logic (keeping only essential parts)
+    # Full image checks
     if (blue_count + black_count) / total > 0.8:
         label = "Normal"
-    elif (red_count + orange_count + yellow_count) / total > 0.7:
+    elif (red_count + orange_count) / total > 0.5:
+        label = "Full Wire Overload"
+    elif (yellow_count) / total > 0.5:
+        label = "Full Wire Overload"
+
+    # Check for full wire overload (dominant warm colors)
+    full_wire_thresh = 0.7
+    if (red_count + orange_count + yellow_count) / total > full_wire_thresh:
         label = "Full Wire Overload"
         box_list.append((0, 0, img.shape[1], img.shape[0]))
         label_list.append(label)
     else:
-        # Point overloads detection (simplified)
+        # Point overloads (areas + thresholds)
         min_area_faulty = 120
+        min_area_potential = 1000
         max_area = 0.05 * total
-        
-        contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        for mask, spot_label, min_a in [
+            (red_mask, "Point Overload (Faulty)", min_area_faulty),
+            (yellow_mask, "Point Overload (Potential)", min_area_potential),
+        ]:
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                if min_a < area < max_area:
+                    x, y, w, h = cv2.boundingRect(cnt)
+                    box_list.append((x, y, w, h))
+                    label_list.append(spot_label)
+
+        # Middle area checks (Loose Joint detection)
+        h, w = img.shape[:2]
+        center = img[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4]
+        center_hsv = cv2.cvtColor(center, cv2.COLOR_BGR2HSV)
+        center_yellow = cv2.inRange(center_hsv, (20, 130, 130), (35, 255, 255))
+        center_orange = cv2.inRange(center_hsv, (10, 100, 100), (25, 255, 255))
+        center_red1 = cv2.inRange(center_hsv, (0, 100, 100), (10, 255, 255))
+        center_red2 = cv2.inRange(center_hsv, (160, 100, 100), (180, 255, 255))
+        center_red = cv2.bitwise_or(center_red1, center_red2)
+
+        if np.sum(center_red > 0) + np.sum(center_orange > 0) > 0.1 * center.size:
+            label = "Loose Joint (Faulty)"
+            box_list.append((w // 4, h // 4, w // 2, h // 2))
+            label_list.append(label)
+        elif np.sum(center_yellow > 0) > 0.1 * center.size:
+            label = "Loose Joint (Potential)"
+            box_list.append((w // 4, h // 4, w // 2, h // 2))
+            label_list.append(label)
+
+    # Tiny spots (always check)
+    min_area_tiny, max_area_tiny = 10, 30
+    for mask, spot_label in [
+        (red_mask, "Tiny Faulty Spot"),
+        (yellow_mask, "Tiny Potential Spot"),
+    ]:
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if min_area_faulty < area < max_area:
+            if min_area_tiny < area < max_area_tiny:
                 x, y, w, h = cv2.boundingRect(cnt)
                 box_list.append((x, y, w, h))
-                label_list.append("Point Overload (Faulty)")
+                label_list.append(spot_label)
 
+    # Detect wire-shaped (long/thin) warm regions
+    aspect_ratio_thresh = 5
+    min_strip_area = 0.01 * total
+    wire_boxes, wire_labels = [], []
+    for mask, strip_label in [
+        (red_mask, "Wire Overload (Red Strip)"),
+        (yellow_mask, "Wire Overload (Yellow Strip)"),
+        (orange_mask, "Wire Overload (Orange Strip)"),
+    ]:
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area > min_strip_area:
+                x, y, w, h = cv2.boundingRect(cnt)
+                aspect_ratio = max(w, h) / (min(w, h) + 1e-6)
+                if aspect_ratio > aspect_ratio_thresh:
+                    wire_boxes.append((x, y, w, h))
+                    wire_labels.append(strip_label)
+
+    # Prioritize wire boxes first
+    box_list = wire_boxes[:] + box_list
+    label_list = wire_labels[:] + label_list
+
+    # Final pruning/merging
+    box_list, label_list = _nms_iou(box_list, label_list, iou_thresh=0.4)
+    box_list, label_list = _filter_faulty_inside_potential(box_list, label_list)
+    box_list, label_list = _filter_faulty_overlapping_potential(box_list, label_list)
+    box_list, label_list = _merge_close_boxes(box_list, label_list, dist_thresh=100)
+
+    print(f"[Classification] Final label: {label}, Boxes found: {len(box_list)}")
     return label, box_list, label_list, img
 
 
@@ -213,10 +413,27 @@ def download_image_from_url(url):
     """Download image from URL to temp file"""
     import requests
     import tempfile
+    from urllib.parse import urlparse
+    import mimetypes
+    
     response = requests.get(url, stream=True)
     if response.status_code != 200:
         raise Exception(f"Failed to download image from {url}")
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+    
+    # Determine file extension from URL or Content-Type
+    content_type = response.headers.get('content-type', '')
+    if 'image/png' in content_type:
+        suffix = '.png'
+    elif 'image/jpeg' in content_type or 'image/jpg' in content_type:
+        suffix = '.jpg'
+    else:
+        # Try to get extension from URL
+        parsed_url = urlparse(url)
+        path = parsed_url.path
+        ext = os.path.splitext(path)[1]
+        suffix = ext if ext in ['.jpg', '.jpeg', '.png', '.bmp'] else '.jpg'
+    
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     for chunk in response.iter_content(1024):
         tmp.write(chunk)
     tmp.close()
