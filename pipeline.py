@@ -11,6 +11,8 @@ import torch
 import tempfile
 import requests
 from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+load_dotenv()
 import cloudinary
 import cloudinary.uploader
 import subprocess
@@ -33,13 +35,13 @@ os.makedirs(OUT_BOXED_DIR, exist_ok=True)
 
 # ---- Cloudinary config ----
 cloudinary.config(
-    cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME"),
-    api_key=os.environ.get("CLOUDINARY_API_KEY"),
-    api_secret=os.environ.get("CLOUDINARY_API_SECRET")
+    cloud_name="dtyjmwyrp",
+    api_key="619824242791553",
+    api_secret="l8hHU1GIg1FJ8rDgvHd4Sf7BWMk"
 )
 
 # ---- Load model once ----
-GDRIVE_URL = os.environ.get("GDRIVE_MODEL_URL")
+GDRIVE_URL = "1ftzxTJUnlxpQFqPlaUozG_JUbl1Qi5tQ"
 MODEL_CKPT_PATH = os.path.abspath("model_checkpoint.ckpt")
 try:
     import gdown
@@ -48,7 +50,7 @@ except ImportError:
     import gdown
 if not os.path.exists(MODEL_CKPT_PATH):
     print(f"[INFO] Downloading model checkpoint from Google Drive to {MODEL_CKPT_PATH}...")
-    gdown.download(GDRIVE_URL, MODEL_CKPT_PATH, quiet=False)
+    gdown.download(id=GDRIVE_URL, output=MODEL_CKPT_PATH, quiet=False)
 else:
     print(f"[INFO] Model checkpoint already exists at {MODEL_CKPT_PATH}, skipping download.")
 model = Patchcore.load_from_checkpoint(MODEL_CKPT_PATH, **config.model.init_args)

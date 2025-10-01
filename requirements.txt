@@ -1,7 +1,6 @@
-anomalib==2.1.0
+anomalib[full]
 cloudinary
 flask
-anomalib[vlm_clip]
 gdown
 numpy
 opencv-python
