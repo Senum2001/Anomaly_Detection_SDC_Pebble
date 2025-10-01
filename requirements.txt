@@ -12,3 +12,4 @@ requests
 torch==2.4.1
 torchvision
 gunicorn
+runpod

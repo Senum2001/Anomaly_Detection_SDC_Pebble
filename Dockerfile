@@ -25,5 +25,5 @@ EXPOSE 5000
 # Set environment variables (optional)
 ENV PYTHONUNBUFFERED=1
 
-# Start the Flask app using Gunicorn for production
-CMD ["gunicorn", "pipeline:app", "--bind", "0.0.0.0:5000", "--timeout", "600"]
+# Start the RunPod serverless handler
+CMD ["python", "-u", "handler.py"]
