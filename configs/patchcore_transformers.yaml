@@ -1,0 +1,27 @@
+model:
+  class_path: anomalib.models.Patchcore
+  init_args:
+    backbone: "wide_resnet50_2"
+    layers: ["layer2", "layer3"]
+    coreset_sampling_ratio: 0.1
+    num_neighbors: 9
+
+data:
+  # You can also use: class_path: anomalib.data.Folder (re-export)
+  class_path: anomalib.data.datamodules.image.folder.Folder
+  init_args:
+    name: "transformers"
+    root: "./dataset"
+    normal_dir: "train/normal"       # ONLY normal images here
+    abnormal_dir: "test/faulty"      # faulty images for eval
+    normal_test_dir: "test/normal"   # a few normals for eval
+    train_batch_size: 4
+    eval_batch_size: 4
+    num_workers: 4
+    # (optional) add augmentations later via train_augmentations/val_augmentations/test_augmentations
+
+trainer:
+  max_epochs: 1
+  accelerator: "auto"
+  devices: 1
+  enable_checkpointing: true
