@@ -23,6 +23,7 @@ cloudinary
 # Configuration
 omegaconf
 pyyaml
+python-dotenv
 
 # Utilities
 requests
