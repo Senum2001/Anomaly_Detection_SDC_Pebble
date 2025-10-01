@@ -9,6 +9,8 @@ from PIL import Image
 import torch
 import subprocess
 import sys
+import requests
+import tempfile
 import cloudinary
 import cloudinary.uploader
 
