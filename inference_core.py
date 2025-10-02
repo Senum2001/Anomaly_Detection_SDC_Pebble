@@ -126,16 +126,21 @@ def _iou(boxA, boxB):
     return interArea / float(boxAArea + boxBArea - interArea + 1e-6)
 
 
-def _merge_close_boxes(boxes, labels, dist_thresh=20):
-    """Merge boxes that are close to each other"""
-    merged, merged_labels = [], []
+def _merge_close_boxes(boxes, labels, dist_thresh=20, confidences=None):
+    """Merge boxes that are close to each other, maintaining confidence alignment"""
+    if confidences is None:
+        confidences = [0.5] * len(boxes)
+    
+    merged, merged_labels, merged_confidences = [], [], []
     used = [False] * len(boxes)
     for i in range(len(boxes)):
         if used[i]:
             continue
         x1, y1, w1, h1 = boxes[i]
         label1 = labels[i]
+        conf1 = confidences[i]
         x2, y2, w2, h2 = x1, y1, w1, h1
+        max_conf = conf1
         for j in range(i + 1, len(boxes)):
             if used[j]:
                 continue
@@ -147,11 +152,13 @@ def _merge_close_boxes(boxes, labels, dist_thresh=20):
                 y2 = min(y2, by)
                 w2 = max(x1 + w1, bx + bw) - x2
                 h2 = max(y1 + h1, by + bh) - y2
+                max_conf = max(max_conf, confidences[j])
                 used[j] = True
         merged.append((x2, y2, w2, h2))
         merged_labels.append(label1)
+        merged_confidences.append(max_conf)
         used[i] = True
-    return merged, merged_labels
+    return merged, merged_labels, merged_confidences
 
 
 def _nms_iou(boxes, labels, iou_thresh=0.4):
@@ -172,10 +179,32 @@ def _nms_iou(boxes, labels, iou_thresh=0.4):
     return keep, keep_labels
 
 
-def _filter_faulty_inside_potential(boxes, labels):
-    """Remove potential boxes that contain faulty boxes"""
-    filtered_boxes, filtered_labels = [], []
-    for (box, label) in zip(boxes, labels):
+def _nms_iou_with_confidence(boxes, labels, confidences, iou_thresh=0.4):
+    """Non-maximum suppression using IOU, keeping confidence aligned"""
+    if len(boxes) == 0:
+        return [], [], []
+    idxs = np.argsort([w * h for (x, y, w, h) in boxes])[::-1]
+    keep, keep_labels, keep_confidences = [], [], []
+    while len(idxs) > 0:
+        i = idxs[0]
+        keep.append(boxes[i])
+        keep_labels.append(labels[i])
+        keep_confidences.append(confidences[i])
+        remove = [0]
+        for j in range(1, len(idxs)):
+            if _iou(boxes[i], boxes[idxs[j]]) > iou_thresh:
+                remove.append(j)
+        idxs = np.delete(idxs, remove)
+    return keep, keep_labels, keep_confidences
+
+
+def _filter_faulty_inside_potential(boxes, labels, confidences=None):
+    """Remove potential boxes that contain faulty boxes, maintaining confidence alignment"""
+    if confidences is None:
+        confidences = [0.5] * len(boxes)
+    
+    filtered_boxes, filtered_labels, filtered_confidences = [], [], []
+    for (box, label, conf) in zip(boxes, labels, confidences):
         if label == "Point Overload (Potential)":
             keep = True
             x, y, w, h = box
@@ -188,14 +217,19 @@ def _filter_faulty_inside_potential(boxes, labels):
             if keep:
                 filtered_boxes.append(box)
                 filtered_labels.append(label)
+                filtered_confidences.append(conf)
         else:
             filtered_boxes.append(box)
             filtered_labels.append(label)
-    return filtered_boxes, filtered_labels
+            filtered_confidences.append(conf)
+    return filtered_boxes, filtered_labels, filtered_confidences
 
 
-def _filter_faulty_overlapping_potential(boxes, labels):
-    """Remove potential boxes that overlap with faulty boxes"""
+def _filter_faulty_overlapping_potential(boxes, labels, confidences=None):
+    """Remove potential boxes that overlap with faulty boxes, maintaining confidence alignment"""
+    if confidences is None:
+        confidences = [0.5] * len(boxes)
+    
     def is_overlapping(boxA, boxB):
         xA = max(boxA[0], boxB[0])
         yA = max(boxA[1], boxB[1])
@@ -203,8 +237,8 @@ def _filter_faulty_overlapping_potential(boxes, labels):
         yB = min(boxA[1] + boxA[3], boxB[1] + boxB[3])
         return (xB > xA) and (yB > yA)
 
-    filtered_boxes, filtered_labels = [], []
-    for (box, label) in zip(boxes, labels):
+    filtered_boxes, filtered_labels, filtered_confidences = [], [], []
+    for (box, label, conf) in zip(boxes, labels, confidences):
         if label == "Point Overload (Potential)":
             keep = True
             for (fbox, flabel) in zip(boxes, labels):
@@ -214,10 +248,78 @@ def _filter_faulty_overlapping_potential(boxes, labels):
             if keep:
                 filtered_boxes.append(box)
                 filtered_labels.append(label)
+                filtered_confidences.append(conf)
         else:
             filtered_boxes.append(box)
             filtered_labels.append(label)
-    return filtered_boxes, filtered_labels
+            filtered_confidences.append(conf)
+    return filtered_boxes, filtered_labels, filtered_confidences
+
+
+def _calculate_confidence(img, box, mask, label):
+    """
+    Calculate confidence score for a detection based on:
+    - Color intensity within the bounding box
+    - Coverage ratio (how much of the box contains the target color)
+    - Size relative to image
+    """
+    x, y, w, h = box
+    
+    # Extract region of interest
+    roi = img[y:y+h, x:x+w]
+    mask_roi = mask[y:y+h, x:x+w]
+    
+    if roi.size == 0 or mask_roi.size == 0:
+        return 0.5
+    
+    # Calculate coverage (what % of the box has the target color)
+    coverage = np.sum(mask_roi > 0) / mask_roi.size
+    
+    # Calculate intensity (average value in the detected region)
+    if np.sum(mask_roi > 0) > 0:
+        intensity = np.mean(roi[mask_roi > 0]) / 255.0
+    else:
+        intensity = 0.0
+    
+    # Calculate relative size (boxes that are too small or too large are less confident)
+    total_pixels = img.shape[0] * img.shape[1]
+    box_size = w * h
+    size_ratio = box_size / total_pixels
+    
+    # Size confidence: optimal between 0.001 and 0.05 of image
+    if size_ratio < 0.0001:
+        size_conf = size_ratio / 0.0001  # Very small
+    elif size_ratio > 0.1:
+        size_conf = max(0.3, 1.0 - (size_ratio - 0.1) / 0.9)  # Very large
+    else:
+        size_conf = 1.0  # Good size
+    
+    # Label-specific confidence adjustments
+    if "Faulty" in label:
+        base_conf = 0.7  # Higher base for faulty (red is more definitive)
+    elif "Potential" in label:
+        base_conf = 0.6  # Lower base for potential (yellow is warning)
+    elif "Tiny" in label:
+        base_conf = 0.5  # Lower for tiny spots
+    elif "Wire" in label or "Full" in label:
+        base_conf = 0.8  # High for large patterns
+    elif "Loose Joint" in label:
+        base_conf = 0.7  # Moderate for center detections
+    else:
+        base_conf = 0.6
+    
+    # Weighted combination
+    confidence = (
+        base_conf * 0.4 +
+        coverage * 0.35 +
+        intensity * 0.15 +
+        size_conf * 0.10
+    )
+    
+    # Clamp to [0.3, 0.99] range
+    confidence = max(0.3, min(0.99, confidence))
+    
+    return round(confidence, 3)
 
 
 def classify_filtered_image(filtered_img_path: str):
@@ -227,6 +329,7 @@ def classify_filtered_image(filtered_img_path: str):
       label: str
       box_list: [(x, y, w, h), ...]
       label_list: [str, ...]
+      confidence_list: [float, ...] - confidence scores (0-1) for each box
       img_bgr: the filtered image as BGR
     """
     img = cv2.imread(filtered_img_path)
@@ -261,7 +364,7 @@ def classify_filtered_image(filtered_img_path: str):
           f"Yellow: {yellow_count}, Orange: {orange_count}, Red: {red_count}")
 
     label = "Unknown"
-    box_list, label_list = [], []
+    box_list, label_list, confidence_list = [], [], []
 
     # Full image checks
     if (blue_count + black_count) / total > 0.8:
@@ -275,8 +378,12 @@ def classify_filtered_image(filtered_img_path: str):
     full_wire_thresh = 0.7
     if (red_count + orange_count + yellow_count) / total > full_wire_thresh:
         label = "Full Wire Overload"
-        box_list.append((0, 0, img.shape[1], img.shape[0]))
+        box = (0, 0, img.shape[1], img.shape[0])
+        box_list.append(box)
         label_list.append(label)
+        # Full image detection - high confidence based on color coverage
+        conf = min(0.95, 0.7 + ((red_count + orange_count + yellow_count) / total - full_wire_thresh) * 0.8)
+        confidence_list.append(round(conf, 3))
     else:
         # Point overloads (areas + thresholds)
         min_area_faulty = 120
@@ -292,8 +399,10 @@ def classify_filtered_image(filtered_img_path: str):
                 area = cv2.contourArea(cnt)
                 if min_a < area < max_area:
                     x, y, w, h = cv2.boundingRect(cnt)
-                    box_list.append((x, y, w, h))
+                    box = (x, y, w, h)
+                    box_list.append(box)
                     label_list.append(spot_label)
+                    confidence_list.append(_calculate_confidence(img, box, mask, spot_label))
 
         # Middle area checks (Loose Joint detection)
         h, w = img.shape[:2]
@@ -307,12 +416,18 @@ def classify_filtered_image(filtered_img_path: str):
 
         if np.sum(center_red > 0) + np.sum(center_orange > 0) > 0.1 * center.size:
             label = "Loose Joint (Faulty)"
-            box_list.append((w // 4, h // 4, w // 2, h // 2))
+            box = (w // 4, h // 4, w // 2, h // 2)
+            box_list.append(box)
             label_list.append(label)
+            center_coverage = (np.sum(center_red > 0) + np.sum(center_orange > 0)) / center.size
+            confidence_list.append(round(min(0.85, 0.6 + center_coverage), 3))
         elif np.sum(center_yellow > 0) > 0.1 * center.size:
             label = "Loose Joint (Potential)"
-            box_list.append((w // 4, h // 4, w // 2, h // 2))
+            box = (w // 4, h // 4, w // 2, h // 2)
+            box_list.append(box)
             label_list.append(label)
+            center_coverage = np.sum(center_yellow > 0) / center.size
+            confidence_list.append(round(min(0.75, 0.5 + center_coverage), 3))
 
     # Tiny spots (always check)
     min_area_tiny, max_area_tiny = 10, 30
@@ -325,13 +440,15 @@ def classify_filtered_image(filtered_img_path: str):
             area = cv2.contourArea(cnt)
             if min_area_tiny < area < max_area_tiny:
                 x, y, w, h = cv2.boundingRect(cnt)
-                box_list.append((x, y, w, h))
+                box = (x, y, w, h)
+                box_list.append(box)
                 label_list.append(spot_label)
+                confidence_list.append(_calculate_confidence(img, box, mask, spot_label))
 
     # Detect wire-shaped (long/thin) warm regions
     aspect_ratio_thresh = 5
     min_strip_area = 0.01 * total
-    wire_boxes, wire_labels = [], []
+    wire_boxes, wire_labels, wire_confidences = [], [], []
     for mask, strip_label in [
         (red_mask, "Wire Overload (Red Strip)"),
         (yellow_mask, "Wire Overload (Yellow Strip)"),
@@ -344,21 +461,24 @@ def classify_filtered_image(filtered_img_path: str):
                 x, y, w, h = cv2.boundingRect(cnt)
                 aspect_ratio = max(w, h) / (min(w, h) + 1e-6)
                 if aspect_ratio > aspect_ratio_thresh:
-                    wire_boxes.append((x, y, w, h))
+                    box = (x, y, w, h)
+                    wire_boxes.append(box)
                     wire_labels.append(strip_label)
+                    wire_confidences.append(_calculate_confidence(img, box, mask, strip_label))
 
     # Prioritize wire boxes first
     box_list = wire_boxes[:] + box_list
     label_list = wire_labels[:] + label_list
+    confidence_list = wire_confidences[:] + confidence_list
 
-    # Final pruning/merging
-    box_list, label_list = _nms_iou(box_list, label_list, iou_thresh=0.4)
-    box_list, label_list = _filter_faulty_inside_potential(box_list, label_list)
-    box_list, label_list = _filter_faulty_overlapping_potential(box_list, label_list)
-    box_list, label_list = _merge_close_boxes(box_list, label_list, dist_thresh=100)
+    # Final pruning/merging - need to keep confidence aligned
+    box_list, label_list, confidence_list = _nms_iou_with_confidence(box_list, label_list, confidence_list, iou_thresh=0.4)
+    box_list, label_list, confidence_list = _filter_faulty_inside_potential(box_list, label_list, confidence_list)
+    box_list, label_list, confidence_list = _filter_faulty_overlapping_potential(box_list, label_list, confidence_list)
+    box_list, label_list, confidence_list = _merge_close_boxes(box_list, label_list, dist_thresh=100, confidences=confidence_list)
 
     print(f"[Classification] Final label: {label}, Boxes found: {len(box_list)}")
-    return label, box_list, label_list, img
+    return label, box_list, label_list, confidence_list, img
 
 
 def run_pipeline_for_image(image_path: str):
@@ -371,17 +491,19 @@ def run_pipeline_for_image(image_path: str):
     if filtered_path is None:
         filtered_path = orig_path
 
-    # 2) Classify
-    label, boxes, labels, _filtered_bgr = classify_filtered_image(filtered_path)
+    # 2) Classify (now returns confidence_list as well)
+    label, boxes, labels, confidences, _filtered_bgr = classify_filtered_image(filtered_path)
 
     # 3) Draw boxes on original image
     draw_img = cv2.imread(orig_path)
     if draw_img is None:
         raise FileNotFoundError(f"Could not read original image: {orig_path}")
 
-    for (x, y, w, h), l in zip(boxes, labels):
+    for (x, y, w, h), l, conf in zip(boxes, labels, confidences):
         cv2.rectangle(draw_img, (x, y), (x + w, y + h), (0, 0, 255), 2)
-        cv2.putText(draw_img, l, (x, max(0, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        # Show label and confidence on the image
+        text = f"{l} ({conf:.2f})"
+        cv2.putText(draw_img, text, (x, max(0, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
     if not boxes:
         cv2.putText(draw_img, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
@@ -403,8 +525,8 @@ def run_pipeline_for_image(image_path: str):
         "mask_path": pc_out["mask_path"],
         "filtered_path": pc_out["filtered_path"],
         "boxes": [
-            {"box": [int(x), int(y), int(w), int(h)], "type": l}
-            for (x, y, w, h), l in zip(boxes, labels)
+            {"box": [int(x), int(y), int(w), int(h)], "type": l, "confidence": float(conf)}
+            for (x, y, w, h), l, conf in zip(boxes, labels, confidences)
         ]
     }
 
