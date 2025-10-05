@@ -322,6 +322,94 @@ def _calculate_confidence(img, box, mask, label):
     return round(confidence, 3)
 
 
+def _get_severity_color(label, confidence):
+    """
+    Get color-coded bounding box color based on severity and confidence.
+    Returns BGR color tuple for OpenCV.
+    
+    Severity levels:
+    - CRITICAL (Red spectrum): Faulty detections
+    - WARNING (Yellow/Orange spectrum): Potential detections
+    - INFO (Green/Blue spectrum): Normal/Informational
+    
+    Color intensity increases with confidence (0-1):
+    - Low confidence (0.3-0.5): Lighter, more transparent colors
+    - Medium confidence (0.5-0.7): Medium intensity
+    - High confidence (0.7-1.0): Bright, vivid colors
+    """
+    # Normalize confidence to 0-1 range for color interpolation
+    conf_normalized = max(0.0, min(1.0, confidence))
+    
+    # Determine severity level based on label
+    if "Faulty" in label or "Full Wire Overload" in label:
+        # CRITICAL - Red spectrum
+        # Low conf: Light red/pink -> High conf: Bright red
+        severity = "CRITICAL"
+        if conf_normalized < 0.5:
+            # Light red/pink (BGR)
+            intensity = int(100 + (conf_normalized / 0.5) * 155)  # 100-255
+            color = (100, 100, intensity)  # Light red
+        elif conf_normalized < 0.7:
+            # Medium red (BGR)
+            intensity = int(150 + ((conf_normalized - 0.5) / 0.2) * 105)  # 150-255
+            color = (50, 50, intensity)  # Medium red
+        else:
+            # Bright red/dark red (BGR)
+            intensity = int(200 + ((conf_normalized - 0.7) / 0.3) * 55)  # 200-255
+            color = (0, 0, intensity)  # Bright red
+            
+    elif "Potential" in label:
+        # WARNING - Yellow/Orange spectrum
+        # Low conf: Light yellow -> High conf: Bright orange/yellow
+        severity = "WARNING"
+        if conf_normalized < 0.5:
+            # Light yellow (BGR)
+            intensity = int(150 + (conf_normalized / 0.5) * 105)  # 150-255
+            color = (intensity, intensity, 50)  # Light yellow
+        elif conf_normalized < 0.7:
+            # Medium yellow-orange (BGR)
+            b_val = int(50 + ((conf_normalized - 0.5) / 0.2) * 50)  # 50-100
+            g_val = int(200 + ((conf_normalized - 0.5) / 0.2) * 55)  # 200-255
+            color = (b_val, g_val, 255)  # Yellow-orange
+        else:
+            # Bright orange (BGR)
+            b_val = int(0 + ((conf_normalized - 0.7) / 0.3) * 50)  # 0-50
+            color = (b_val, 165, 255)  # Bright orange
+            
+    elif "Wire" in label:
+        # HIGH SEVERITY - Deep red/magenta for wire overload
+        severity = "HIGH"
+        if conf_normalized < 0.5:
+            intensity = int(150 + (conf_normalized / 0.5) * 105)
+            color = (intensity // 2, 0, intensity)  # Pink-magenta
+        else:
+            intensity = int(200 + ((conf_normalized - 0.5) / 0.5) * 55)
+            color = (intensity // 3, 0, intensity)  # Deep red-magenta
+            
+    elif "Tiny" in label:
+        # MINOR - Purple spectrum (still concerning but smaller)
+        severity = "MINOR"
+        if conf_normalized < 0.5:
+            intensity = int(150 + (conf_normalized / 0.5) * 105)
+            color = (intensity, 50, intensity - 50)  # Light purple
+        else:
+            intensity = int(200 + ((conf_normalized - 0.5) / 0.5) * 55)
+            color = (intensity, 0, intensity - 50)  # Bright purple
+            
+    elif "Normal" in label:
+        # INFO - Green spectrum
+        severity = "INFO"
+        intensity = int(100 + conf_normalized * 155)  # 100-255
+        color = (50, intensity, 50)  # Green
+    else:
+        # UNKNOWN - Blue spectrum
+        severity = "UNKNOWN"
+        intensity = int(100 + conf_normalized * 155)
+        color = (intensity, 100, 50)  # Blue
+    
+    return color, severity
+
+
 def classify_filtered_image(filtered_img_path: str):
     """
     Runs the heuristic color-based classification on the FILTERED image.
@@ -494,19 +582,59 @@ def run_pipeline_for_image(image_path: str):
     # 2) Classify (now returns confidence_list as well)
     label, boxes, labels, confidences, _filtered_bgr = classify_filtered_image(filtered_path)
 
-    # 3) Draw boxes on original image
+    # 3) Draw boxes on original image with severity-based colors
     draw_img = cv2.imread(orig_path)
     if draw_img is None:
         raise FileNotFoundError(f"Could not read original image: {orig_path}")
 
     for (x, y, w, h), l, conf in zip(boxes, labels, confidences):
-        cv2.rectangle(draw_img, (x, y), (x + w, y + h), (0, 0, 255), 2)
-        # Show label and confidence on the image
+        # Get color based on severity and confidence
+        box_color, severity = _get_severity_color(l, conf)
+        
+        # Draw bounding box with severity color (thicker for higher confidence)
+        thickness = 2 if conf < 0.7 else 3
+        cv2.rectangle(draw_img, (x, y), (x + w, y + h), box_color, thickness)
+        
+        # Prepare text with severity indicator
         text = f"{l} ({conf:.2f})"
-        cv2.putText(draw_img, text, (x, max(0, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        severity_badge = f"[{severity}]"
+        
+        # Calculate text sizes
+        (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+        (badge_w, badge_h), _ = cv2.getTextSize(severity_badge, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+        
+        # Draw semi-transparent background for text
+        bg_y_start = max(0, y - text_h - badge_h - 8)
+        bg_y_end = max(text_h + badge_h + 8, y - 2)
+        cv2.rectangle(draw_img, (x, bg_y_start), (x + max(text_w, badge_w) + 10, bg_y_end), (0, 0, 0), -1)
+        
+        # Draw severity badge in severity color
+        cv2.putText(draw_img, severity_badge, (x + 2, max(badge_h + 2, y - text_h - 4)), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, box_color, 1, cv2.LINE_AA)
+        
+        # Draw label and confidence in white
+        cv2.putText(draw_img, text, (x + 2, max(text_h + badge_h + 4, y - 2)), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+        
+        # Add corner markers for high confidence detections (conf > 0.8)
+        if conf > 0.8:
+            marker_size = 8
+            # Top-left corner
+            cv2.line(draw_img, (x, y), (x + marker_size, y), box_color, 3)
+            cv2.line(draw_img, (x, y), (x, y + marker_size), box_color, 3)
+            # Top-right corner
+            cv2.line(draw_img, (x + w, y), (x + w - marker_size, y), box_color, 3)
+            cv2.line(draw_img, (x + w, y), (x + w, y + marker_size), box_color, 3)
+            # Bottom-left corner
+            cv2.line(draw_img, (x, y + h), (x + marker_size, y + h), box_color, 3)
+            cv2.line(draw_img, (x, y + h), (x, y + h - marker_size), box_color, 3)
+            # Bottom-right corner
+            cv2.line(draw_img, (x + w, y + h), (x + w - marker_size, y + h), box_color, 3)
+            cv2.line(draw_img, (x + w, y + h), (x + w, y + h - marker_size), box_color, 3)
 
     if not boxes:
-        cv2.putText(draw_img, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        # If no boxes, show overall label in green (normal)
+        cv2.putText(draw_img, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
     base = os.path.splitext(os.path.basename(orig_path))[0]
     ext = os.path.splitext(os.path.basename(orig_path))[1]
@@ -519,15 +647,28 @@ def run_pipeline_for_image(image_path: str):
     print(f"[Pipeline] Classification label: {label}")
     print(f"[Pipeline] Saved boxes-on-original -> {out_boxed_path}")
     
+    # Build boxes array with severity and color information
+    boxes_output = []
+    for (x, y, w, h), l, conf in zip(boxes, labels, confidences):
+        box_color, severity = _get_severity_color(l, conf)
+        boxes_output.append({
+            "box": [int(x), int(y), int(w), int(h)],
+            "type": l,
+            "confidence": float(conf),
+            "severity": severity,
+            "color": {
+                "bgr": [int(box_color[0]), int(box_color[1]), int(box_color[2])],
+                "rgb": [int(box_color[2]), int(box_color[1]), int(box_color[0])],
+                "hex": "#{:02x}{:02x}{:02x}".format(int(box_color[2]), int(box_color[1]), int(box_color[0]))
+            }
+        })
+    
     return {
         "label": label,
         "boxed_path": out_boxed_path,
         "mask_path": pc_out["mask_path"],
         "filtered_path": pc_out["filtered_path"],
-        "boxes": [
-            {"box": [int(x), int(y), int(w), int(h)], "type": l, "confidence": float(conf)}
-            for (x, y, w, h), l, conf in zip(boxes, labels, confidences)
-        ]
+        "boxes": boxes_output
     }
 
 
