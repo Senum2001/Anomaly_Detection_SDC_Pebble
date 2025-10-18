@@ -1,23 +1,30 @@
 """
 Hugging Face Spaces API wrapper
 Provides direct JSON responses without job queues
+Integrated with feedback learning pipeline for continuous model improvement
 """
 from flask import Flask, request, jsonify
-from inference_core import run_pipeline_for_image, download_image_from_url, upload_to_cloudinary
+from inference_core import run_pipeline_for_image, download_image_from_url, upload_to_cloudinary, model, device
+from scripts.feedback_learning_pipeline import initialize_feedback_pipeline, run_feedback_training
 import os
 
 app = Flask(__name__)
+
+# Initialize feedback learning pipeline
+feedback_pipeline = initialize_feedback_pipeline(model, device)
 
 
 @app.route("/", methods=["GET"])
 def home():
     """Home page with API documentation"""
     return jsonify({
-        "service": "Anomaly Detection API",
-        "version": "1.0",
+        "service": "Anomaly Detection API with Feedback Learning",
+        "version": "2.0",
         "endpoints": {
             "/health": "GET - Health check",
-            "/infer": "POST - Run inference on image URL"
+            "/infer": "POST - Run inference on image URL",
+            "/feedback/stats": "GET - Get feedback statistics and training status",
+            "/feedback/train": "POST - Manually trigger feedback training cycle"
         },
         "example_request": {
             "method": "POST",
@@ -25,6 +32,11 @@ def home():
             "body": {
                 "image_url": "https://example.com/image.jpg"
             }
+        },
+        "feedback_info": {
+            "description": "User corrections are automatically fetched from Supabase",
+            "training_trigger": "Automatic when 10+ new feedback samples available",
+            "manual_training": "POST /feedback/train to trigger immediately"
         }
     })
 
@@ -33,6 +45,31 @@ def home():
 def health():
     """Health check endpoint"""
     return jsonify({"status": "healthy"}), 200
+
+
+@app.route("/feedback/stats", methods=["GET"])
+def feedback_stats():
+    """
+    Get feedback statistics and training status
+    """
+    try:
+        stats = feedback_pipeline.get_feedback_stats()
+        return jsonify(stats), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/feedback/train", methods=["POST"])
+def trigger_training():
+    """
+    Manually trigger a feedback training cycle
+    Fetches user corrections from Supabase and improves model
+    """
+    try:
+        results = run_feedback_training(feedback_pipeline)
+        return jsonify(results), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/infer", methods=["POST"])
