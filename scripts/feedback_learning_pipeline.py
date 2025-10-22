@@ -269,9 +269,13 @@ class FeedbackLearningPipeline:
         # Capture model state BEFORE training
         before_state = None
         if self.version_tracker:
-            before_state = self.version_tracker.get_current_model_state()
-            self.version_tracker.log_model_version(before_state)
-            print(f"[Model Versioning] Captured state before training: {before_state['version_id'][:8]}...")
+            try:
+                before_state = self.version_tracker.get_current_model_state()
+                self.version_tracker.log_model_version(before_state)
+                print(f"[Model Versioning] Captured state before training: {before_state['version_id'][:8]}...")
+            except Exception as e:
+                print(f"[Model Versioning] Warning: Could not capture before state: {e}")
+                self.version_tracker = None  # Disable versioning for this run
         
         # Fetch new feedback
         feedback_logs = self.fetch_new_feedback(limit=1000)
@@ -314,22 +318,25 @@ class FeedbackLearningPipeline:
         # Capture model state AFTER training
         after_state = None
         training_cycle_id = None
-        if self.version_tracker:
-            after_state = self.version_tracker.get_current_model_state()
-            self.version_tracker.log_model_version(after_state)
-            print(f"[Model Versioning] Captured state after training: {after_state['version_id'][:8]}...")
-            
-            # Log the training cycle with before/after comparison
-            training_cycle_id = self.version_tracker.log_training_cycle(
-                before_state=before_state,
-                after_state=after_state,
-                feedback_count=len(corrections),
-                patterns=patterns,
-                performance_metrics=None  # TODO: Calculate actual metrics
-            )
-            
-            if training_cycle_id:
-                print(f"[Training History] Logged training cycle: {training_cycle_id[:8]}...")
+        if self.version_tracker and before_state:
+            try:
+                after_state = self.version_tracker.get_current_model_state()
+                self.version_tracker.log_model_version(after_state)
+                print(f"[Model Versioning] Captured state after training: {after_state['version_id'][:8]}...")
+                
+                # Log the training cycle with before/after comparison
+                training_cycle_id = self.version_tracker.log_training_cycle(
+                    before_state=before_state,
+                    after_state=after_state,
+                    feedback_count=len(corrections),
+                    patterns=patterns,
+                    performance_metrics=None  # TODO: Calculate actual metrics
+                )
+                
+                if training_cycle_id:
+                    print(f"[Training History] Logged training cycle: {training_cycle_id[:8]}...")
+            except Exception as e:
+                print(f"[Model Versioning] Error logging version: {e}")
         
         print(f"[Feedback Pipeline] Training cycle completed successfully")
         print(f"[Feedback Pipeline] Total feedback processed: {self.training_state['total_feedback_processed']}")
@@ -339,8 +346,8 @@ class FeedbackLearningPipeline:
             "corrections_processed": len(corrections),
             "patterns": patterns,
             "total_feedback_processed": self.training_state["total_feedback_processed"],
-            "before_version_id": before_state["version_id"] if before_state else None,
-            "after_version_id": after_state["version_id"] if after_state else None,
+            "before_version_id": before_state.get("version_id") if before_state else None,
+            "after_version_id": after_state.get("version_id") if after_state else None,
             "training_cycle_id": training_cycle_id
         }
     
