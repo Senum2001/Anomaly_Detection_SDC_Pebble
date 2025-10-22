@@ -13,6 +13,14 @@ from supabase import create_client, Client
 from PIL import Image
 import tempfile
 
+# Import model versioning system
+try:
+    from scripts.model_versioning import ModelVersionTracker
+    MODEL_VERSIONING_AVAILABLE = True
+except ImportError:
+    MODEL_VERSIONING_AVAILABLE = False
+    print("[Warning] Model versioning not available")
+
 # Supabase configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://xbcgrpqiibicestnhytt.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhiY2dycHFpaWJpY2VzdG5oeXR0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NTkxMzk3MywiZXhwIjoyMDcxNDg5OTczfQ.sANBuVZ6gdYc5kHkxTXZ67jtE9QHPw5HFaUKffP1Jrs")
@@ -39,6 +47,12 @@ class FeedbackLearningPipeline:
         self.model = model
         self.device = device
         self.training_state = self._load_training_state()
+        
+        # Initialize model versioning tracker
+        if MODEL_VERSIONING_AVAILABLE:
+            self.version_tracker = ModelVersionTracker()
+        else:
+            self.version_tracker = None
         
     def _load_training_state(self) -> Dict[str, Any]:
         """Load training state from disk"""
@@ -252,6 +266,13 @@ class FeedbackLearningPipeline:
         """
         print(f"\n[Feedback Pipeline] Starting training cycle at {datetime.now()}")
         
+        # Capture model state BEFORE training
+        before_state = None
+        if self.version_tracker:
+            before_state = self.version_tracker.get_current_model_state()
+            self.version_tracker.log_model_version(before_state)
+            print(f"[Model Versioning] Captured state before training: {before_state['version_id'][:8]}...")
+        
         # Fetch new feedback
         feedback_logs = self.fetch_new_feedback(limit=1000)
         
@@ -290,6 +311,26 @@ class FeedbackLearningPipeline:
         
         self._save_training_state()
         
+        # Capture model state AFTER training
+        after_state = None
+        training_cycle_id = None
+        if self.version_tracker:
+            after_state = self.version_tracker.get_current_model_state()
+            self.version_tracker.log_model_version(after_state)
+            print(f"[Model Versioning] Captured state after training: {after_state['version_id'][:8]}...")
+            
+            # Log the training cycle with before/after comparison
+            training_cycle_id = self.version_tracker.log_training_cycle(
+                before_state=before_state,
+                after_state=after_state,
+                feedback_count=len(corrections),
+                patterns=patterns,
+                performance_metrics=None  # TODO: Calculate actual metrics
+            )
+            
+            if training_cycle_id:
+                print(f"[Training History] Logged training cycle: {training_cycle_id[:8]}...")
+        
         print(f"[Feedback Pipeline] Training cycle completed successfully")
         print(f"[Feedback Pipeline] Total feedback processed: {self.training_state['total_feedback_processed']}")
         
@@ -297,7 +338,10 @@ class FeedbackLearningPipeline:
             "status": "success",
             "corrections_processed": len(corrections),
             "patterns": patterns,
-            "total_feedback_processed": self.training_state["total_feedback_processed"]
+            "total_feedback_processed": self.training_state["total_feedback_processed"],
+            "before_version_id": before_state["version_id"] if before_state else None,
+            "after_version_id": after_state["version_id"] if after_state else None,
+            "training_cycle_id": training_cycle_id
         }
     
     def get_feedback_stats(self) -> Dict[str, Any]:

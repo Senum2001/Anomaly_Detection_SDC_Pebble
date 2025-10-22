@@ -6,12 +6,16 @@ Integrated with feedback learning pipeline for continuous model improvement
 from flask import Flask, request, jsonify
 from inference_core import run_pipeline_for_image, download_image_from_url, upload_to_cloudinary, model, device
 from scripts.feedback_learning_pipeline import initialize_feedback_pipeline, run_feedback_training
+from scripts.model_versioning import initialize_model_tracker
 import os
 
 app = Flask(__name__)
 
 # Initialize feedback learning pipeline
 feedback_pipeline = initialize_feedback_pipeline(model, device)
+
+# Initialize model versioning tracker
+model_tracker = initialize_model_tracker()
 
 
 @app.route("/", methods=["GET"])
@@ -24,7 +28,11 @@ def home():
             "/health": "GET - Health check",
             "/infer": "POST - Run inference on image URL",
             "/feedback/stats": "GET - Get feedback statistics and training status",
-            "/feedback/train": "POST - Manually trigger feedback training cycle"
+            "/feedback/train": "POST - Manually trigger feedback training cycle",
+            "/model/current": "GET - Get current model version and parameters",
+            "/model/versions": "GET - Get model version history",
+            "/model/training-history": "GET - Get training cycle history",
+            "/model/compare": "POST - Compare model versions"
         },
         "example_request": {
             "method": "POST",
@@ -37,6 +45,11 @@ def home():
             "description": "User corrections are automatically fetched from Supabase",
             "training_trigger": "Automatic when 10+ new feedback samples available",
             "manual_training": "POST /feedback/train to trigger immediately"
+        },
+        "versioning_info": {
+            "description": "Model versions and training history tracked automatically",
+            "view_current": "GET /model/current to see active model parameters",
+            "view_history": "GET /model/versions to see all versions"
         }
     })
 
@@ -68,6 +81,74 @@ def trigger_training():
     try:
         results = run_feedback_training(feedback_pipeline)
         return jsonify(results), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/model/current", methods=["GET"])
+def get_current_model():
+    """
+    Get current active model version and parameters
+    """
+    try:
+        current_state = model_tracker.get_current_model_state()
+        return jsonify(current_state), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/model/versions", methods=["GET"])
+def get_model_versions():
+    """
+    Get model version history
+    Query params: limit (default: 20)
+    """
+    try:
+        limit = int(request.args.get('limit', 20))
+        versions = model_tracker.get_version_history(limit=limit)
+        return jsonify({
+            "total": len(versions),
+            "versions": versions
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/model/training-history", methods=["GET"])
+def get_training_history():
+    """
+    Get training cycle history
+    Query params: limit (default: 20)
+    """
+    try:
+        limit = int(request.args.get('limit', 20))
+        history = model_tracker.get_training_history(limit=limit)
+        return jsonify({
+            "total": len(history),
+            "training_cycles": history
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/model/compare", methods=["POST"])
+def compare_versions():
+    """
+    Compare multiple model versions
+    Request JSON: {"version_ids": ["id1", "id2", ...]}
+    """
+    try:
+        data = request.get_json()
+        if not data or "version_ids" not in data:
+            return jsonify({"error": "Missing version_ids"}), 400
+        
+        version_ids = data["version_ids"]
+        comparison = model_tracker.generate_comparison_table(version_ids)
+        
+        return jsonify({
+            "comparison": comparison,
+            "version_count": len(version_ids)
+        }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
